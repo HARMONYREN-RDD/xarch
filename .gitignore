@@ -1,2 +1,8 @@
-build
+# Dirs
+build/
+**/build/
 
+# Files
+*.o
+*.d
+*.out

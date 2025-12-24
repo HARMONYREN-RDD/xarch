@@ -1,0 +1,2 @@
+setb R0B0 16'5
+setw R0W0 16'FFFF

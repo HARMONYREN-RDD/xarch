@@ -1,22 +1,3 @@
-#include <iostream>
+#include <xarch/origin//x64/Architecture.hpp>
 
-#include <xwm/architecture.hpp>
-#include <xwm/cli.hpp>
-
-extern "C" {
-
-class MyArchitecture : public xwm::Architecture {
-public:
-  MyArchitecture(xwm::Vec<std::string> args) : Architecture(std::move(args)) {}
-  ~MyArchitecture() override = default;
-
-  int run() noexcept override {
-    std::cout << "Hello World!" << std::endl;
-    return 0;
-  }
-};
-
-xwm::Architecture *load_architecture(xwm::Vec<std::string> args) {
-  return new MyArchitecture(std::move(args));
-}
-}
+XWM_ENTRY(xarch::origin::xarch_origin_x64);
