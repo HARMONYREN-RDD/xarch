@@ -1,157 +1,156 @@
 #include <iostream>
-#include <vector>
+
+#include <filesystem>
 #include <fstream>
-#include <sstream>
+#include <vector>
+#include <ranges>
 #include <unordered_map>
-#include <cstdint>
 
-#include <xasm/error.hpp>
-using namespace xasm;
 
-// Convert decimal or 16_hex format to uint64_t
-std::expected<std::uint64_t, FatalError> string_to_uint(const std::string& n_str) {
-  std::uint64_t n = 0;
+namespace fs = std::filesystem;
 
-  if (n_str.size() >= 4 && n_str[0] == '1' && n_str[1] == '6' && n_str[2] == '_') {
-    std::string hex_part = n_str.substr(3);
-    if (hex_part.empty()) return std::unexpected{ "Empty hex value" };
+using u8 = std::uint8_t;
+using u16 = std::uint16_t;
+using u64 = std::uint64_t;
 
-    for (char ch : hex_part) {
-      n *= 16;
-      if (ch >= '0' && ch <= '9') n += ch - '0';
-      else if (ch >= 'A' && ch <= 'F') n += 10 + (ch - 'A');
-      else if (ch >= 'a' && ch <= 'f') n += 10 + (ch - 'a');
-      else return std::unexpected{ "Invalid hex character" };
-    }
-  }
-  else {
-    for (char ch : n_str) {
-      if (!isdigit(ch)) return std::unexpected("Characters are not admitted");
-      n = n * 10 + (ch - '0');
-    }
-  }
+using String = std::string;
 
-  return n;
-}
+using Path = fs::path;
+
+template <typename T> using Vec = std::vector<T>;
+template <typename T1, typename T2> using Map = std::unordered_map<T1, T2>;
+
+
+enum class ParameterType : u8 {
+  REGISTER, VALUE
+};
 
 struct Parameter {
-  enum class Type { REGISTER, VALUE } type;
-  std::uint16_t byte_width; // bytes used for actual value
+  ParameterType type;
+  u8 byte_size;
+  std::string label;
 };
 
 struct Instruction {
-  std::uint16_t opcode;
-  std::vector<Parameter> parameters;
+  u16 opcode;
+  Vec<Parameter> parameters;
 };
 
-using InstructionSet = std::unordered_map<std::string, Instruction>;
+using InstructionSet = Map<String, Instruction>;
 
-std::expected<uint32_t, FatalError> compile_file(std::ifstream& file, const InstructionSet& is) {
-  std::vector<std::uint8_t> output;
-  std::string line;
-  std::uint64_t line_number = 1;
-
-  while (std::getline(file, line)) {
-    if (line.empty()) { line_number++; continue; }
-
-    std::istringstream ss(line);
-    std::string token;
-    std::vector<std::string> tokens;
-
-    while (ss >> token) {
-      if (token == "#") break; // comment
-      tokens.push_back(token);
-    }
-
-    if (tokens.empty()) { line_number++; continue; }
-
-    std::string mnemonic = tokens[0];
-    auto it = is.find(mnemonic);
-    if (it == is.end())
-      Err("Mnemonic '{}' does not exist", mnemonic);
-
-    auto& inst = it->second;
-
-    // write opcode (2 bytes, little-endian)
-    output.push_back(inst.opcode & 0xFF);
-    output.push_back(inst.opcode >> 8);
-
-    size_t operand_idx = 0;
-    for (; operand_idx < inst.parameters.size(); ++operand_idx) {
-      if (operand_idx + 1 >= tokens.size())
-        Err("Missing operand for '{}'", mnemonic);
-
-      token = tokens[operand_idx + 1];
-      uint64_t value = 0;
-
-      auto& param = inst.parameters[operand_idx];
-      switch (param.type) {
-      case Parameter::Type::REGISTER:
-        if (token.size() < 2)
-          Err("Register token too short '{}'", token);
-
-        if (token[1] >= '0' && token[1] <= '9') value = token[1] - '0';
-        else if (token[1] >= 'A' && token[1] <= 'F') value = 10 + (token[1] - 'A');
-        else Err("Invalid register number '{}'", token);
-
-        break;
-
-      case Parameter::Type::VALUE:
-        value = unwrap_or_fatal(string_to_uint(token));
-
-        break;
-
-      default:
-        Err("Unexpected parameter type");
-      }
-
-      for (int i = 0; i < 8; ++i) {
-        output.push_back(static_cast<uint8_t>(value & 0xFF));
-        value >>= 8;
-      }
-    }
+void compile_xasm_file(const Path& input_file_path, Vec<u8>& output, const InstructionSet& instruction_set);
+void dump_to_file(const Path& output_file_path, const Vec<u8>& output);
 
 
-    for (size_t i = 0; i < 3 - inst.parameters.size(); i++)
-      for (int j = 0; j < 8; j++)
-        output.push_back(0x00);
+int main() {
+  Path file_path("./test.xasm");
+  InstructionSet is;
 
-    line_number++;
-  }
+  // 第0章：記憶口作戦
+  is["seto"] = { 0x0003, {{ParameterType::REGISTER, 8}, {ParameterType::VALUE, 8} } };
+  is["cpo"] = { 0x0007, {{ParameterType::REGISTER, 8}, {ParameterType::REGISTER, 8} } };
 
-  std::ofstream out("out.bin", std::ios::binary);
-  out.write(reinterpret_cast<const char*>(output.data()), static_cast<std::streamsize>(output.size()));
-  out.close();
+  // 第１章：主記憶作戦
+  is["storeo"] = { 0x0013, {{ParameterType::VALUE, 64}, {ParameterType::VALUE, 64}} };
+  is["loado"] = { 0x0017, {{ParameterType::REGISTER, 64}, {ParameterType::VALUE, 64}} };
+
+  // 第２章：算術
+  is["addorr"] = { 0x0020, {{ParameterType::REGISTER, 64}, {ParameterType::REGISTER, 64}, {ParameterType::REGISTER, 64}} };
+  is["addorv"] = { 0x0021, {{ParameterType::REGISTER, 64}, {ParameterType::REGISTER, 64}, {ParameterType::VALUE, 64}} };
+  is["suborr"] = { 0x0022, {{ParameterType::REGISTER, 64}, {ParameterType::REGISTER, 64}, {ParameterType::REGISTER, 64}} };
+  is["suborv"] = { 0x0023, {{ParameterType::REGISTER, 64}, {ParameterType::REGISTER, 64}, {ParameterType::VALUE, 64}} };
+  is["mulorr"] = { 0x0024, {{ParameterType::REGISTER, 64}, {ParameterType::REGISTER, 64}, {ParameterType::REGISTER, 64}} };
+  is["mulorv"] = { 0x0025, {{ParameterType::REGISTER, 64}, {ParameterType::REGISTER, 64}, {ParameterType::VALUE, 64}} };
+  is["divorr"] = { 0x0026, {{ParameterType::REGISTER, 64}, {ParameterType::REGISTER, 64}, {ParameterType::REGISTER, 64}} };
+  is["divorv"] = { 0x0027, {{ParameterType::REGISTER, 64}, {ParameterType::REGISTER, 64}, {ParameterType::VALUE, 64}} };
+
+
+  // 第特殊章：特殊作戦
+  is["print"] = { 0xFFFF, {} };
+
+  Vec<u8> output;
+  compile_xasm_file(file_path, output, is);
+  dump_to_file("out.xb", output);
 
   return 0;
 }
 
+void compile_tokens(const Vec<String>& tokens, const InstructionSet& instruction_set, Vec<u8>& output) {
+  auto it = instruction_set.find(tokens[0]);
+  if (it == instruction_set.end()) {
+    std::cout << "Mnemonic " << tokens[0] << " not found" << std::endl;
+    std::exit(1);
+  }
 
-int main() {
-  std::ifstream file("test.xasm");
-  if (!file.is_open()) { std::cerr << "Cannot open file\n"; return 1; }
-
-  InstructionSet instruction_set;
-
-  instruction_set["setq"] = { 0x0003, { {Parameter::Type::REGISTER, 8}, {Parameter::Type::VALUE, 8}} };
-  instruction_set["cpq"] = { 0x0007, { {Parameter::Type::REGISTER, 8}, {Parameter::Type::REGISTER, 8}} };
-
-  instruction_set["loadq"] = { 0x0013, { {Parameter::Type::VALUE, 8}, {Parameter::Type::VALUE, 8}} };
-  instruction_set["storeq"] = { 0x0017, { {Parameter::Type::VALUE, 8}, {Parameter::Type::VALUE, 8}} };
-
-  instruction_set["addqrr"] = { 0x0030, { {Parameter::Type::REGISTER, 8}, {Parameter::Type::REGISTER, 8}, {Parameter::Type::REGISTER, 8}} };
-  instruction_set["addqrv"] = { 0x0031, { {Parameter::Type::REGISTER, 8}, {Parameter::Type::REGISTER, 8}, {Parameter::Type::VALUE, 8}} };
-  instruction_set["subqrr"] = { 0x0032, { {Parameter::Type::REGISTER, 8}, {Parameter::Type::REGISTER, 8}, {Parameter::Type::REGISTER, 8}} };
-  instruction_set["subqrv"] = { 0x0033, { {Parameter::Type::REGISTER, 8}, {Parameter::Type::REGISTER, 8}, {Parameter::Type::VALUE, 8}} };
-  instruction_set["mulqrr"] = { 0x0034, { {Parameter::Type::REGISTER, 8}, {Parameter::Type::REGISTER, 8}, {Parameter::Type::REGISTER, 8}} };
-  instruction_set["mulqrv"] = { 0x0035, { {Parameter::Type::REGISTER, 8}, {Parameter::Type::REGISTER, 8}, {Parameter::Type::VALUE, 8}} };
-  instruction_set["divqrr"] = { 0x0036, { {Parameter::Type::REGISTER, 8}, {Parameter::Type::REGISTER, 8}, {Parameter::Type::REGISTER, 8}} };
-  instruction_set["divqrv"] = { 0x0037, { {Parameter::Type::REGISTER, 8}, {Parameter::Type::REGISTER, 8}, {Parameter::Type::VALUE, 8}} };
+  auto& instruction = it->second;
+  auto& opcode = instruction.opcode;
+  output.push_back(opcode & 0xFF);
+  output.push_back(opcode >> 8);
 
 
-  instruction_set["print"] = { 0xFFFF, {} };
+  if (tokens.size() - 1 < instruction.parameters.size()) {
+    std::cout << "Too few params" << std::endl;
+    std::exit(1);
+  }
 
-  unwrap_or_fatal(compile_file(file, instruction_set));
+  if (tokens.size() - 1 > instruction.parameters.size()) {
+    std::cout << "Too many params" << std::endl;
+    std::exit(1);
+  }
 
-  return 0;
+  u8 parameter_index = 1;
+
+  for (auto& parameter : instruction.parameters) {
+    auto operand = tokens[parameter_index];
+
+    if (parameter.type == ParameterType::VALUE) {
+      if (parameter.byte_size == 8) {
+        u64 out_u64 = 0;
+        if (operand.size() > 3 && (operand[0] == '1' && operand[1] == '6' && operand[2] == '_')) {
+          operand = operand.substr(3);
+          out_u64 = std::stoull(operand, nullptr, 16);
+        }
+        else {
+          out_u64 = std::stoull(operand, nullptr, 10);
+        }
+
+        for (size_t i = 0; i < 8; ++i) {
+          output.push_back(static_cast<uint8_t>(out_u64 >> (i * 8)));
+        }
+
+      }
+    }
+
+    parameter_index++;
+  }
+
+}
+
+void compile_xasm_file(const Path& input_file_path, Vec<u8>& output, const InstructionSet& instruction_set) {
+  std::ifstream file(input_file_path);
+  String line = "";
+  std::uint64_t line_number = 0;
+
+  while (std::getline(file, line)) {
+    line_number++;
+
+    std::istringstream iss(line);
+    Vec<String> tokens;
+    String token = "";
+
+    while (iss >> token) {
+      if (token[0] == '#')
+        break;
+      tokens.push_back(token);
+    }
+
+    compile_tokens(tokens, instruction_set, output);
+  }
+}
+
+void dump_to_file(const Path& output_file_path, const Vec<u8>& output) {
+  std::ofstream out_file(output_file_path, std::ios::binary);
+  if (!out_file)
+    throw std::runtime_error("Failed to open file: " + output_file_path.string());
+  out_file.write(reinterpret_cast<const char*>(output.data()), output.size());
 }
